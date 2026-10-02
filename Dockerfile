@@ -1,4 +1,4 @@
-FROM moodlehq/moodle-php-apache:8.1
+FROM moodlehq/moodle-php-apache:8.4
 
 LABEL org.opencontainers.image.source="https://github.com/YOUR_GITHUB_USERNAME/telite-lms"
 LABEL org.opencontainers.image.description="Telite LMS Moodle image with PostgreSQL support"
