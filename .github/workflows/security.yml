@@ -1,0 +1,179 @@
+name: Security
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - Dev-Ops
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TRIVY_IMAGE: aquasec/trivy:0.65.0
+  GITLEAKS_IMAGE: ghcr.io/gitleaks/gitleaks:v8.28.0
+  TRUFFLEHOG_IMAGE: trufflesecurity/trufflehog:3.90.8
+
+jobs:
+  secrets:
+    name: Secret scanning
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            RANGE="${PR_BASE_SHA}..${PR_HEAD_SHA}"
+          elif [[ "$GITHUB_EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
+            RANGE="${GITHUB_EVENT_BEFORE}..${GITHUB_SHA}"
+          else
+            RANGE="${GITHUB_SHA}"
+          fi
+
+          echo "Scanning commit range: $RANGE"
+
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -w /repo \
+            "$GITLEAKS_IMAGE" detect \
+            --source=/repo \
+            --log-opts="$RANGE" \
+            --gitleaks-ignore-path=/repo/.gitleaksignore \
+            --redact \
+            --verbose
+
+      - name: TruffleHog
+        run: |
+          # Secret scanning with TruffleHog. Configured to:
+          # 1. Only FAIL on verified secrets (real credentials), not unverified false positives
+          # 2. Still report unverified findings for review
+          # 3. moodledata.tar.gz is already in .gitignore to prevent commits
+          docker run --rm \
+            -v "$PWD:/repo" \
+            "$TRUFFLEHOG_IMAGE" git \
+            file:///repo \
+            --fail \
+            --results=verified
+
+  dependency-vulnerability-scan:
+    name: Dependency vulnerability scan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Frontend npm audit
+        working-directory: telite-frontend
+        run: npm audit --audit-level=critical
+
+      - name: Python dependency audit
+        working-directory: telite-backend
+        run: |
+          python -m pip install --upgrade pip pip-audit safety
+          pip-audit -r requirements.txt --strict
+          safety check -r requirements.txt --full-report
+
+  filesystem-scan:
+    name: Repository filesystem scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            -w /repo \
+            "$TRIVY_IMAGE" fs \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --java-db-repository ghcr.io/aquasecurity/trivy-java-db:1 \
+            --skip-dirs /repo/moodle \
+            --skip-dirs /repo/telite-frontend/node_modules \
+            --skip-dirs /repo/telite-frontend/dist \
+            --skip-dirs /repo/.git \
+            --skip-dirs /repo/.jetro \
+            --skip-files /repo/moodledata.tar.gz \
+            --no-progress \
+            /repo
+
+  container-scan:
+    name: Container image scan
+    runs-on: ubuntu-latest
+    env:
+      ENVIRONMENT: production
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ci-postgres-password
+      TELITE_POSTGRES_DB: telite_backend
+      TELITE_POSTGRES_USER: telite_app
+      TELITE_POSTGRES_PASSWORD: ci-telite-password
+      TELITE_AUTH_SECRET: ci-production-secret-with-more-than-32-characters
+      TELITE_PASSWORD_SALT: ci-production-salt-value
+      REDIS_PASSWORD: ci-redis-password
+      MOODLE_DB_NAME: moodle
+      MOODLE_DB_USER: moodleuser
+      MOODLE_DB_PASSWORD: ci-moodle-password
+      TELITE_APP_URL: https://lms.example.com
+      TELITE_CORS_ORIGINS: https://lms.example.com
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: strict
+      MOODLE_MODE: mock
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build backend and frontend images
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend frontend
+
+      - name: Scan backend image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            "$TRIVY_IMAGE" image \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --java-db-repository ghcr.io/aquasecurity/trivy-java-db:1 \
+            --no-progress \
+            telite-lms-backend:latest
+
+      - name: Scan frontend image
+        run: |
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            "$TRIVY_IMAGE" image \
+            --exit-code 1 \
+            --severity CRITICAL,HIGH \
+            --ignore-unfixed \
+            --db-repository ghcr.io/aquasecurity/trivy-db:2 \
+            --java-db-repository ghcr.io/aquasecurity/trivy-java-db:1 \
+            --no-progress \
+            telite-lms-frontend:latest

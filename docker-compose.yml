@@ -1,0 +1,327 @@
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-development}
+  TELITE_USE_ALEMBIC: ${TELITE_USE_ALEMBIC:-true}
+  TELITE_AUTH_SECRET: ${TELITE_AUTH_SECRET}
+  TELITE_PASSWORD_SALT: ${TELITE_PASSWORD_SALT}
+  TELITE_ADMIN_PASSWORD: ${TELITE_ADMIN_PASSWORD:-}
+  TELITE_DEFAULT_LEARNER_PASSWORD: ${TELITE_DEFAULT_LEARNER_PASSWORD:-}
+  TELITE_ACCESS_TOKEN_HOURS: ${TELITE_ACCESS_TOKEN_HOURS:-8}
+  TELITE_REFRESH_TOKEN_DAYS: ${TELITE_REFRESH_TOKEN_DAYS:-14}
+  COOKIE_SECURE: ${COOKIE_SECURE:-false}
+  COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
+  COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+  TELITE_APP_URL: ${TELITE_APP_URL}
+  TELITE_CORS_ORIGINS: ${TELITE_CORS_ORIGINS}
+  SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  FROM_NAME: ${FROM_NAME:-Telite LMS}
+  RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+  RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+  R2_ENABLED: ${R2_ENABLED:-false}
+  R2_ENDPOINT: ${R2_ENDPOINT:-}
+  R2_ACCESS_KEY: ${R2_ACCESS_KEY:-}
+  R2_SECRET_KEY: ${R2_SECRET_KEY:-}
+  R2_BUCKET: ${R2_BUCKET:-telite-media-bucket}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_FORMAT: ${LOG_FORMAT:-text}
+  TELITE_UPLOAD_ROOT: ${TELITE_UPLOAD_ROOT:-/app/uploads}
+  MOODLE_TOKEN: ${MOODLE_TOKEN:-}
+  BACKEND_INTERNAL_PORT: ${BACKEND_INTERNAL_PORT:-8001}
+
+services:
+  postgres:
+    image: postgres:14
+    container_name: telite_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-postgres}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MOODLE_DB_USER: ${MOODLE_DB_USER}
+      MOODLE_DB_NAME: ${MOODLE_DB_NAME}
+      MOODLE_DB_PASSWORD: ${MOODLE_DB_PASSWORD}
+      TELITE_POSTGRES_DB: ${TELITE_POSTGRES_DB}
+      TELITE_POSTGRES_USER: ${TELITE_POSTGRES_USER}
+      TELITE_POSTGRES_PASSWORD: ${TELITE_POSTGRES_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  redis:
+    image: redis:7-alpine
+    container_name: telite_redis
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD}\" ping | grep PONG || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+  moodle:
+    image: telite-lms-moodle:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telite_moodle
+    restart: unless-stopped
+    ports:
+      - "${MOODLE_PORT:-8082}:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MOODLE_DB_HOST: postgres
+      MOODLE_DB_PORT: 5432
+      MOODLE_DB_NAME: ${MOODLE_DB_NAME}
+      MOODLE_DB_USER: ${MOODLE_DB_USER}
+      MOODLE_DB_PASSWORD: ${MOODLE_DB_PASSWORD}
+      MOODLE_WWWROOT: ${MOODLE_WWWROOT:-http://localhost:8082}
+    volumes:
+      - moodledata:/var/www/moodledata
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  backend:
+    build:
+      context: ./telite-backend
+      dockerfile: Dockerfile
+    container_name: telite_backend
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend-env
+      TELITE_DB_BACKEND: postgres
+      TELITE_POSTGRES_HOST: postgres
+      TELITE_POSTGRES_PORT: 5432
+      TELITE_POSTGRES_DB: ${TELITE_POSTGRES_DB}
+      TELITE_POSTGRES_USER: ${TELITE_POSTGRES_USER}
+      TELITE_POSTGRES_PASSWORD: ${TELITE_POSTGRES_PASSWORD}
+      TELITE_RUNTIME_POSTGRES_USER: ${TELITE_RUNTIME_POSTGRES_USER:-}
+      TELITE_RUNTIME_POSTGRES_PASSWORD: ${TELITE_RUNTIME_POSTGRES_PASSWORD:-}
+      TELITE_DATABASE_URL: ""
+      TELITE_MIGRATION_DATABASE_URL: ${TELITE_MIGRATION_DATABASE_URL}
+      TELITE_SQLITE_SOURCE_PATH: ""
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_ENABLED: "true"
+      MOODLE_INTERNAL_URL: http://moodle
+      MOODLE_URL: ${MOODLE_URL:-http://localhost:8082}
+      MOODLE_WWWROOT: ${MOODLE_WWWROOT:-http://localhost:8082}
+      MOODLE_MODE: ${MOODLE_MODE:-mock}
+    ports:
+      - "${BACKEND_PORT:-8001}:${BACKEND_INTERNAL_PORT:-8001}"
+    volumes:
+      - ${TELITE_UPLOADS_VOLUME:-telite-lms_uploads}:/app/uploads
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request; port=os.getenv('BACKEND_INTERNAL_PORT','8001'); urllib.request.urlopen(f'http://127.0.0.1:{port}/health/readiness', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      moodle:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  seed_permissions:
+    build:
+      context: ./telite-backend
+      dockerfile: Dockerfile
+    container_name: telite_seed_permissions
+    restart: "no"
+    command: python -m scripts.seed_permissions
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend-env
+      TELITE_DB_BACKEND: postgres
+      TELITE_POSTGRES_HOST: postgres
+      TELITE_POSTGRES_PORT: 5432
+      TELITE_POSTGRES_DB: ${TELITE_POSTGRES_DB}
+      TELITE_POSTGRES_USER: ${TELITE_POSTGRES_USER}
+      TELITE_POSTGRES_PASSWORD: ${TELITE_POSTGRES_PASSWORD}
+      TELITE_MIGRATION_DATABASE_URL: ${TELITE_MIGRATION_DATABASE_URL}
+      TELITE_DATABASE_URL: ""
+      TELITE_SQLITE_SOURCE_PATH: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  seed_kt_learn:
+    build:
+      context: ./telite-backend
+      dockerfile: Dockerfile
+    container_name: telite_seed_kt_learn
+    restart: "no"
+    command: python -m scripts.seed_kt_learn
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend-env
+      TELITE_DB_BACKEND: postgres
+      TELITE_POSTGRES_HOST: postgres
+      TELITE_POSTGRES_PORT: 5432
+      TELITE_POSTGRES_DB: ${TELITE_POSTGRES_DB}
+      TELITE_POSTGRES_USER: ${TELITE_POSTGRES_USER}
+      TELITE_POSTGRES_PASSWORD: ${TELITE_POSTGRES_PASSWORD}
+      TELITE_MIGRATION_DATABASE_URL: ${TELITE_MIGRATION_DATABASE_URL}
+      TELITE_DATABASE_URL: ""
+      TELITE_SQLITE_SOURCE_PATH: ""
+    depends_on:
+      postgres:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+
+  celery_worker:
+    build:
+      context: ./telite-backend
+      dockerfile: Dockerfile
+    container_name: telite_celery_worker
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=info --queues=default,reconcile,notifications,reminders --concurrency=2
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend-env
+      TELITE_DB_BACKEND: postgres
+      TELITE_POSTGRES_HOST: postgres
+      TELITE_POSTGRES_PORT: 5432
+      TELITE_POSTGRES_DB: ${TELITE_POSTGRES_DB}
+      TELITE_POSTGRES_USER: ${TELITE_POSTGRES_USER}
+      TELITE_POSTGRES_PASSWORD: ${TELITE_POSTGRES_PASSWORD}
+      TELITE_RUNTIME_POSTGRES_USER: ${TELITE_RUNTIME_POSTGRES_USER:-}
+      TELITE_RUNTIME_POSTGRES_PASSWORD: ${TELITE_RUNTIME_POSTGRES_PASSWORD:-}
+      TELITE_MIGRATION_DATABASE_URL: ${TELITE_MIGRATION_DATABASE_URL}
+      TELITE_DATABASE_URL: ""
+      TELITE_SQLITE_SOURCE_PATH: ""
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_ENABLED: "true"
+      MOODLE_INTERNAL_URL: http://moodle
+      MOODLE_URL: ${MOODLE_URL:-http://localhost:8082}
+      MOODLE_MODE: ${MOODLE_MODE:-mock}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  celery_beat:
+    build:
+      context: ./telite-backend
+      dockerfile: Dockerfile
+    container_name: telite_celery_beat
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app beat --loglevel=info
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      <<: *backend-env
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_ENABLED: "true"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 512M
+
+  frontend:
+    build:
+      context: ./telite-frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-}
+        VITE_APP_URL: ${TELITE_APP_URL}
+    environment:
+      BACKEND_SERVICE_HOST: ${BACKEND_SERVICE_HOST:-backend}
+      BACKEND_INTERNAL_PORT: ${BACKEND_INTERNAL_PORT:-8001}
+    container_name: telite_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+volumes:
+  pgdata:
+    name: telite-lms_pgdata
+  moodledata:
+    name: telite-lms_moodledata
+  redisdata:
+    name: telite-lms_redisdata
+  telite-lms_uploads:
+    name: telite-lms_uploads

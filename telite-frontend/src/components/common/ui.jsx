@@ -1,0 +1,276 @@
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
+import { Icon } from "./icons";
+export { Icon };
+
+const ToastContext = createContext({ showToast: () => {} });
+
+export function ToastProvider({ children }) {
+  const [toasts, setToasts] = useState([]);
+
+  const contextValue = useMemo(
+    () => ({
+      showToast(message, tone = "info") {
+        const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        setToasts((current) => [...current, { id, message, tone }]);
+        window.setTimeout(() => {
+          setToasts((current) => current.filter((toast) => toast.id !== id));
+        }, 3000);
+      },
+    }),
+    []
+  );
+
+  return (
+    <ToastContext.Provider value={contextValue}>
+      {children}
+      <div className="toast-stack">
+        {toasts.map((toast) => (
+          <div key={toast.id} className={`toast toast--${toast.tone}`}>
+            {toast.message}
+          </div>
+        ))}
+      </div>
+    </ToastContext.Provider>
+  );
+}
+
+export function useToast() {
+  return useContext(ToastContext);
+}
+
+export function Button({
+  children,
+  tone = "ghost",
+  icon,
+  className = "",
+  type = "button",
+  ...props
+}) {
+  return (
+    <button className={`btn btn--${tone} ${className}`.trim()} type={type} {...props}>
+      {icon ? <Icon name={icon} size={15} /> : null}
+      <span>{children}</span>
+    </button>
+  );
+}
+
+export function IconButton({ label, icon, className = "", ...props }) {
+  return (
+    <button className={`icon-btn ${className}`.trim()} type="button" aria-label={label} {...props}>
+      <Icon name={icon} size={15} />
+    </button>
+  );
+}
+
+export function Badge({ children, tone = "neutral", className = "" }) {
+  return <span className={`badge badge--${tone} ${className}`.trim()}>{children}</span>;
+}
+
+export function Avatar({ initials, gradient = ["#2563EB", "#7C3AED"], size = 30 }) {
+  const background = `linear-gradient(135deg, ${gradient[0]}, ${gradient[1]})`;
+  return (
+    <span
+      className="avatar"
+      style={{ width: size, height: size, background, fontSize: Math.max(10, size * 0.34) }}
+    >
+      {initials}
+    </span>
+  );
+}
+
+export function Panel({ title, subtitle, action, children, footer, className = "" }) {
+  return (
+    <section className={`panel ${className}`.trim()}>
+      {(title || action) && (
+        <header className="panel__header">
+          <div>
+            {title ? <h3>{title}</h3> : null}
+            {subtitle ? <p>{subtitle}</p> : null}
+          </div>
+          {action ? <div className="panel__action">{action}</div> : null}
+        </header>
+      )}
+      <div className="panel__body">{children}</div>
+      {footer ? <footer className="panel__footer">{footer}</footer> : null}
+    </section>
+  );
+}
+
+export function StatCard({ accent, label, value, meta, pulse = false, suffix, delta, tone, icon }) {
+  // Map tone to specific colors for hierarchy
+  const toneColors = {
+    critical: "var(--red)",
+    warn: "var(--amber)",
+    success: "var(--emerald)",
+    info: "var(--brand)"
+  };
+  const finalAccent = toneColors[tone] || accent || "var(--brand)";
+
+  return (
+    <article className={`stat-card ${pulse ? "is-pulse" : ""}`} style={{ height: "100%", display: "flex", flexDirection: "column" }}>
+      <span className="stat-card__accent" style={{ background: finalAccent }} />
+      <div className="stat-card__label" style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span>{label}</span>
+        {icon && <Icon name={icon} size={16} style={{ color: finalAccent, opacity: 0.8 }} />}
+      </div>
+      <div className="stat-card__value" style={{ flexGrow: 1, display: "flex", alignItems: "flex-end", gap: "8px" }}>
+        <span>{value}</span>
+        {suffix ? <small>{suffix}</small> : null}
+      </div>
+      {(meta || delta !== undefined) && (
+        <div className="stat-card__meta" style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+          {delta !== undefined && delta !== 0 && (
+            <span style={{ color: delta > 0 ? "var(--emerald)" : "var(--red)", fontWeight: 600 }}>
+              {delta > 0 ? "+" : ""}{delta}%
+            </span>
+          )}
+          <span style={{ color: "var(--text-muted)" }}>{meta || (delta !== undefined ? "vs last month" : "")}</span>
+        </div>
+      )}
+    </article>
+  );
+}
+
+export function Modal({ open, title, description, children, footer, onClose, width = 480 }) {
+  useEffect(() => {
+    if (!open) {
+      return undefined;
+    }
+
+    function onKeyDown(event) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open, onClose]);
+
+  if (!open) {
+    return null;
+  }
+
+  return createPortal(
+    <div className="modal-root" role="presentation" onMouseDown={onClose}>
+      <div
+        className="modal-card"
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        style={{ width: "100%", maxWidth: width }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="modal-card__top">
+          <div>
+            <h2>{title}</h2>
+            {description ? <p>{description}</p> : null}
+          </div>
+          <IconButton label="Close" icon="x" onClick={onClose} />
+        </div>
+        <div className="modal-card__content">{children}</div>
+        {footer ? <div className="modal-card__footer">{footer}</div> : null}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+export function EmptyState({ title, body, description, icon, action }) {
+  const displayDesc = description || body;
+  return (
+    <div className="empty-state" style={{ padding: "var(--space-48) var(--space-24)", textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-16)" }}>
+      {icon && <Icon name={icon} size={48} style={{ color: "var(--text-muted)", opacity: 0.5 }} />}
+      <div style={{ maxWidth: "400px" }}>
+        <h4 style={{ margin: "0 0 var(--space-8) 0", fontSize: "var(--text-section)", color: "var(--text-primary)" }}>{title}</h4>
+        {displayDesc && <p style={{ margin: 0, color: "var(--text-secondary)", fontSize: "var(--text-body)" }}>{displayDesc}</p>}
+      </div>
+      {action && <div style={{ marginTop: "var(--space-8)" }}>{action}</div>}
+    </div>
+  );
+}
+
+export function LoadingState({ title = "Loading dashboard...", body = "Fetching the latest data." }) {
+  return (
+    <div className="state-card">
+      <div className="spinner" />
+      <h3>{title}</h3>
+      <p>{body}</p>
+    </div>
+  );
+}
+
+export function ErrorState({ title = "Unable to load data.", body, action }) {
+  return (
+    <div className="state-card state-card--error">
+      <h3>{title}</h3>
+      <p>{body}</p>
+      {action}
+    </div>
+  );
+}
+
+export function SkeletonLoader({ rows = 5, showStats = false }) {
+  return (
+    <div className="skeleton">
+      {showStats && (
+        <div className="skeleton-stat-row">
+          {[1, 2, 3, 4].map((i) => (
+            <div className="skeleton-stat-card" key={i}>
+              <div className="skeleton-block skeleton-block--sm" style={{ width: "60%" }} />
+              <div className="skeleton-block skeleton-block--lg" style={{ width: "40%" }} />
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="skeleton-table">
+        {Array.from({ length: rows + 1 }).map((_, i) => (
+          <div className="skeleton-table-row" key={i}>
+            <div className="skeleton-block skeleton-block--circle" style={{ width: 28, height: 28 }} />
+            <div className="skeleton-block skeleton-block--md" style={{ width: "30%", flex: "none" }} />
+            <div className="skeleton-block skeleton-block--sm" style={{ flex: 1 }} />
+            <div className="skeleton-block skeleton-block--sm" style={{ width: "15%", flex: "none" }} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function Field({ label, id, helpText, children }) {
+  return (
+    <div className="field">
+      {label && <label htmlFor={id} className="field__label">{label}</label>}
+      {children}
+      {helpText && <div className="field__help">{helpText}</div>}
+    </div>
+  );
+}
+
+export function Input({ className = "", ...props }) {
+  return <input className={`field__input ${className}`.trim()} {...props} />;
+}
+
+export function Select({ options = [], className = "", ...props }) {
+  return (
+    <select className={`field__input ${className}`.trim()} {...props}>
+      {options.map((opt) => (
+        <option key={opt.value} value={opt.value}>{opt.label}</option>
+      ))}
+    </select>
+  );
+}
+
+export function ColorPicker({ className = "", ...props }) {
+  return <input type="color" className={`field__input ${className}`.trim()} {...props} />;
+}
+
+export function FileUpload({ currentUrl, className = "", ...props }) {
+  return (
+    <div className={`file-upload ${className}`.trim()}>
+      {currentUrl && <img src={currentUrl} alt="Current" style={{ maxHeight: 40, marginBottom: 8, display: 'block' }} />}
+      <input type="file" className="field__input" {...props} />
+    </div>
+  );
+}

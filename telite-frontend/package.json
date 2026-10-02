@@ -1,0 +1,48 @@
+{
+  "name": "telite-frontend",
+  "private": true,
+  "version": "3.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/vite-runner.mjs",
+    "build": "node --max-old-space-size=4096 scripts/vite-runner.mjs build",
+    "preview": "node scripts/vite-runner.mjs preview",
+    "test:frontend": "node --test src/**/*.test.js",
+    "lint": "eslint src --ext js,jsx --max-warnings 0",
+    "lint:fix": "eslint src --ext js,jsx --fix",
+    "lint:ci": "eslint src/components/common src/services src/context src/hooks --ext js,jsx --max-warnings 50"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@studio-freight/lenis": "^1.0.42",
+    "axios": "^1.7.2",
+    "chart.js": "^4.5.1",
+    "framer-motion": "^12.40.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
+    "lenis": "^1.3.23",
+    "lucide-react": "^1.16.0",
+    "react": "^18.3.1",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.30.4",
+    "sharp": "^0.34.5",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.15.0",
+    "@tailwindcss/postcss": "^4.2.4",
+    "@vitejs/plugin-react": "^6.0.3",
+    "agentation": "^3.0.2",
+    "autoprefixer": "^10.5.0",
+    "eslint": "^9.15.0",
+    "eslint-plugin-react": "^7.37.2",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "globals": "^15.12.0",
+    "postcss": "^8.5.13",
+    "tailwindcss": "^4.2.4",
+    "vite": "^8.1.3"
+  }
+}
