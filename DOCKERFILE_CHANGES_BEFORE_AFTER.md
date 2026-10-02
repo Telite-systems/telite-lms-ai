@@ -151,7 +151,7 @@ CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_INTERNAL_
 ### BEFORE (node:20 + nginx:1.27)
 
 ```dockerfile
-FROM node:20-alpine AS build
+FROM node:26-alpine AS build
 
 WORKDIR /app
 ARG VITE_API_BASE_URL=
@@ -186,7 +186,7 @@ CMD ["nginx", "-g", "daemon off;"]
 ### AFTER (node:22 + nginx:1.27 + Security Hardening)
 
 ```dockerfile
-FROM node:22-alpine AS build
+FROM node:26-alpine AS build
 
 WORKDIR /app
 ARG VITE_API_BASE_URL=
