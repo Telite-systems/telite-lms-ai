@@ -146,6 +146,7 @@ jobs:
             tests/test_authorization_runtime.py \
             tests/test_runtime_database_role.py \
             tests/test_certificate_resource_security.py \
+            tests/test_notification_delivery_adapter.py \
             tests/test_assignment_enrollment_security.py \
             tests/test_login_rls.py \
             tests/test_rls_isolation.py \

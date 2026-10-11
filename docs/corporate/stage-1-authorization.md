@@ -142,7 +142,10 @@ Remote Stage 1 evidence: commit `2bbafb54bc56f8c34e38fb9790572c6faeeedcbf`,
 passed 42 regression tests, four live non-owner PostgreSQL tests, actual migration
 and runtime-role provisioning, and downgrade/re-upgrade. Commit
 `747b3c8b66724de52fa36e644d44be5a091418f3` strengthens the suspension assertion to
-use the newly refreshed live token; its dedicated job also passed. The added worker
+use the newly refreshed live token; its dedicated job also passed. The worker check exposed a pre-existing missing `_dispatch_notification_email`
+adapter. It is implemented with plain text, required TLS/authentication, a bounded
+connection timeout and explicit failure on missing credentials or recipient refusal.
+Three local adapter tests use only a fake SMTP client. The added worker
 check requires the next CI run before claiming worker isolation verified. These
 checks do not constitute a complete endpoint/worker/platform-bypass audit.
 

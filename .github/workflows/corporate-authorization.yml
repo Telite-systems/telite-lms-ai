@@ -43,7 +43,7 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
       - name: Runtime authority and assignment revocation regressions
-        run: pytest -q tests/test_authorization_runtime.py tests/test_runtime_database_role.py tests/test_rbac_media_permissions.py tests/test_assignment_enrollment_security.py tests/test_certificate_resource_security.py
+        run: pytest -q tests/test_authorization_runtime.py tests/test_runtime_database_role.py tests/test_rbac_media_permissions.py tests/test_assignment_enrollment_security.py tests/test_certificate_resource_security.py tests/test_notification_delivery_adapter.py
       - name: Fresh migrated schema and non-owner runtime grants
         run: |
           alembic upgrade head
