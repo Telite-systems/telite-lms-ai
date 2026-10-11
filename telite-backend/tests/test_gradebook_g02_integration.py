@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.api.auth import TokenData
-from app.core.security import create_access_token
+from conftest import authenticated_token
 from app.models.assignment_submission import AssignmentSubmission
 from app.models.course import Course
 from app.models.course_module import CourseModule
@@ -188,7 +188,7 @@ def test_native_quiz_submit_writes_grade_result_with_runtime_points(client: Test
     _enroll(db_session, learner, course)
     db_session.commit()
 
-    token = create_access_token(payload={"sub": learner.id, "org_id": ORG_ID})
+    token = authenticated_token(db_session, learner.id, ORG_ID)
     response = client.post(
         f"/api/v1/learner/blocks/{block.id}/quiz/submit",
         headers={"Authorization": f"Bearer {token}"},
@@ -215,7 +215,7 @@ def test_native_quiz_best_attempt_keeps_higher_current_result(client: TestClient
     _enroll(db_session, learner, course)
     db_session.commit()
 
-    token = create_access_token(payload={"sub": learner.id, "org_id": ORG_ID})
+    token = authenticated_token(db_session, learner.id, ORG_ID)
     first = client.post(
         f"/api/v1/learner/blocks/{block.id}/quiz/submit",
         headers={"Authorization": f"Bearer {token}"},

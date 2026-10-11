@@ -236,3 +236,16 @@ def test_assignment_actor_context_sets_rls_claims(db_session):
     assert bypass == "off"
     assert actor_id == "learner-1"
     assert actor_role == "learner"
+
+
+def test_revoked_assignment_enrollment_denies_existing_submission_download(db_session):
+    context = seed_assignment_context(db_session)
+    db_session.commit()
+    actor = token(context["learner"].id, org_id=context["org"].id)
+    service = AssignmentService(db_session, storage=NoopStorage())
+    result = asyncio.run(service.submit(context["block"].id, actor, "Synthetic evidence", [], resubmit=False))
+    db_session.query(EnrollmentRequest).delete()
+    db_session.commit()
+    with pytest.raises(HTTPException) as error:
+        service.resolve_download(result["submission"]["id"], actor)
+    assert error.value.status_code == 403

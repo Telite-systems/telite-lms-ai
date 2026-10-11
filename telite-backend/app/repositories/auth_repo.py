@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import secrets
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select, update
-from sqlalchemy.orm import Session
 
 from app.models.session import AuthSession
 from app.repositories.base_repo import BaseRepository
@@ -38,9 +37,10 @@ class AuthRepository(BaseRepository[AuthSession]):
         org_id: int,
         refresh_token: str,
         expires_at: str,
+        session_id: str | None = None,
     ) -> AuthSession:
         session_record = AuthSession(
-            id=f"sess-{uuid.uuid4().hex[:12]}",
+            id=session_id or f"sess-{uuid.uuid4().hex[:12]}",
             user_id=user_id,
             org_id=org_id,
             refresh_token=refresh_token,
@@ -74,6 +74,7 @@ class AuthRepository(BaseRepository[AuthSession]):
             select(AuthSession)
             .where(AuthSession.user_id == user_id)
             .where(AuthSession.revoked_at.is_(None))
+            .where(AuthSession.expires_at > datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"))
             .order_by(AuthSession.created_at.desc())
         )
         return list(self.session.execute(stmt).scalars().all())
@@ -94,7 +95,7 @@ class AuthRepository(BaseRepository[AuthSession]):
     def create_password_reset_token(self, user_id: str) -> Any:
         from app.models.password_reset_token import PasswordResetToken
         token = secrets.token_urlsafe(32)
-        expires_at = (datetime.now(timezone.utc) + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
+        expires_at = (datetime.now(UTC) + timedelta(minutes=15)).strftime("%Y-%m-%d %H:%M:%S")
         record = PasswordResetToken(
             user_id=user_id,
             token=token,
@@ -111,7 +112,7 @@ class AuthRepository(BaseRepository[AuthSession]):
 
     def mark_password_reset_token_used(self, token_id: int) -> None:
         from app.models.password_reset_token import PasswordResetToken
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
         self.session.execute(
             update(PasswordResetToken).where(PasswordResetToken.id == token_id).values(used_at=now)
         )

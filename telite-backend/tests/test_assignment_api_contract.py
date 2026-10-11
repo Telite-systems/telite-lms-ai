@@ -43,6 +43,13 @@ class FakeAssignmentService:
 
 
 class FakeDb:
+    def __init__(self):
+        self.info = {}
+
+    def get_bind(self):
+        from types import SimpleNamespace
+        return SimpleNamespace(dialect=SimpleNamespace(name="sqlite"))
+
     def execute(self, *_args, **_kwargs):
         return None
 

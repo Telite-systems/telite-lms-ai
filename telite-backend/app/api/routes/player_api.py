@@ -76,7 +76,7 @@ def _has_h5p_playback_access(
         .all()
     )
     for (course_id,) in live_courses:
-        if enrollment_repo.has_access(current_user.id, course_id, current_user.org_id):
+        if enrollment_repo.has_access(current_user.id, course_id, current_user.org_id, actor=current_user):
             return True
 
     published_versions = db.query(CourseVersion).filter(
@@ -86,7 +86,7 @@ def _has_h5p_playback_access(
     for version in published_versions:
         if (
             _published_snapshot_references_asset(version.snapshot_json, asset_id, asset_version)
-            and enrollment_repo.has_access(current_user.id, version.course_id, current_user.org_id)
+            and enrollment_repo.has_access(current_user.id, version.course_id, current_user.org_id, actor=current_user)
         ):
             return True
 

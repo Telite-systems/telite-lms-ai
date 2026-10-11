@@ -44,7 +44,7 @@ from app.db.init_db import run_phase3_init
 configure_logging()
 logger = logging.getLogger("telite.api")
 
-_metrics = {"http_requests_total": 0, "http_errors_total": 0}
+_metrics = {"http_requests_total": 0, "http_errors_total": 0, "auth_denials_total": 0}
 
 
 # ── App lifecycle ────────────────────────────────────────────────────────────
@@ -202,6 +202,8 @@ def create_app() -> FastAPI:
             _metrics["http_requests_total"] += 1
             if response.status_code >= 500:
                 _metrics["http_errors_total"] += 1
+            if response.status_code in (401, 403):
+                _metrics["auth_denials_total"] += 1
             logger.info(
                 "[%s] %s %s from %s -> %d (%.1fms)",
                 request_id,
@@ -370,6 +372,9 @@ def create_app() -> FastAPI:
             "# HELP telite_http_errors_total Total HTTP 5xx responses.",
             "# TYPE telite_http_errors_total counter",
             f"telite_http_errors_total {_metrics['http_errors_total']}",
+            "# HELP telite_auth_denials_total Total HTTP 401/403 responses.",
+            "# TYPE telite_auth_denials_total counter",
+            f"telite_auth_denials_total {_metrics['auth_denials_total']}",
         ]
         return PlainTextResponse("\n".join(lines) + "\n")
 

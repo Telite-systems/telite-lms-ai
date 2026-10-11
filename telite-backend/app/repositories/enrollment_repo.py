@@ -164,7 +164,7 @@ class EnrollmentRepository(BaseRepository[EnrollmentRequest]):
             "total": len(request_ids),
         }
 
-    def has_access(self, user_id: str, course_id: str, org_id: int) -> bool:
+    def has_access(self, user_id: str, course_id: str, org_id: int, *, require_enrollment: bool = False, actor=None) -> bool:
         from app.models.user import User
         from app.models.course import Course
         
@@ -182,16 +182,20 @@ class EnrollmentRepository(BaseRepository[EnrollmentRequest]):
         if not user:
             return False
 
-        if user.role in ("super_admin", "category_admin", "instructor"):
+        if actor is not None and (actor.id != user_id or actor.org_id != org_id):
+            return False
+        role = actor.role if actor is not None else user.role
+        category_scope = actor.category_scope if actor is not None else user.category_scope
+        if role in ("super_admin", "category_admin", "instructor"):
             return True
 
         if course.status not in ("active", "published"):
             return False
 
-        if user.category_scope and user.category_scope == course.category_slug:
+        if category_scope and category_scope == course.category_slug:
             return True
 
-        if course.tier == 'free':
+        if course.tier == 'free' and not require_enrollment:
             return True
 
         # Check explicit approved enrollment for this user/email and course category
@@ -206,7 +210,7 @@ class EnrollmentRepository(BaseRepository[EnrollmentRequest]):
 
         # If learner is in the same org and course is active, allow access
         # This ensures learners can see content created by category admins
-        if user.role == "learner" and user.org_id == org_id:
+        if not require_enrollment and role == "learner" and user.org_id == org_id:
             return True
 
         return False
