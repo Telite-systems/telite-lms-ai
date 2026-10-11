@@ -145,9 +145,17 @@ and runtime-role provisioning, and downgrade/re-upgrade. Commit
 use the newly refreshed live token; its dedicated job also passed. The worker check exposed a pre-existing missing `_dispatch_notification_email`
 adapter. It is implemented with plain text, required TLS/authentication, a bounded
 connection timeout and explicit failure on missing credentials or recipient refusal.
-Three local adapter tests use only a fake SMTP client. The added worker
-check requires the next CI run before claiming worker isolation verified. These
-checks do not constitute a complete endpoint/worker/platform-bypass audit.
+Three local adapter tests use only a fake SMTP client. Final executable commit
+`81788736fa81a3bccfadc025ac8fc6cdaf28ee34`,
+[run 38160626380](https://github.com/Telite-systems/telite-lms-ai/actions/runs/38160626380),
+passed 45 regressions, all five live non-owner PostgreSQL tests (including the real
+notification dispatcher with stubbed delivery), and migration downgrade/re-upgrade.
+The forged cross-tenant user reference produced no delivery. These checks do not
+constitute a complete endpoint/worker/platform-bypass audit. The same executable
+commit also passed the main backend critical regression, backend smoke, frontend
+lint/build, PostgreSQL migration-chain and production-environment jobs in
+[run 38160629807](https://github.com/Telite-systems/telite-lms-ai/actions/runs/38160629807).
+Dependency review remains failing; a green authorization job is not a green release.
 
 Stage 0 remote results: backend smoke/critical regression, PostgreSQL migration chain,
 frontend and Docker build passed; secret and source-artifact jobs passed. Dependency
@@ -177,5 +185,6 @@ whose only permissive policy was new can fail closed after downgrade until a ver
 policy is restored or the revision is re-upgraded. Do not restore unsafe token fallback,
 external QR requests, sensitive archives or disable security tests as recovery.
 
-**Acceptance remains pending** until the new PostgreSQL CI is green, full route and
-worker scope checks are evidenced, and inherited Stage 0 release blockers are resolved.
+**Acceptance remains pending** until full route and worker scope checks are
+evidenced and inherited Stage 0 release blockers are resolved. Dedicated non-owner
+PostgreSQL CI is green for the final executable commit recorded above.
