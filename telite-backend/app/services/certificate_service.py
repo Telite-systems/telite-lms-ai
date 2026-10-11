@@ -1,27 +1,29 @@
+import base64
 import hashlib
-import uuid
+import io
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
+import uuid
+from datetime import UTC, datetime
 from typing import Any
+
 from sqlalchemy.orm import Session
 
 from app.core.storage_paths import certificate_upload_root
 
 # Try importing WeasyPrint and qrcode, but don't fail hard if not installed locally
 try:
-    from weasyprint import HTML, CSS
     import qrcode
     import qrcode.image.svg
+    from weasyprint import HTML
     WEASYPRINT_AVAILABLE = True
 except (ImportError, OSError):
     # OSError occurs when GTK/Pango libraries are missing (Windows local dev)
     WEASYPRINT_AVAILABLE = False
 
 from app.models.certificate import Certificate
+from app.models.course import Course
 from app.models.organization_branding import OrganizationBranding
 from app.models.user import User
-from app.models.course import Course
 
 logger = logging.getLogger("telite.certificates")
 
@@ -78,7 +80,7 @@ class CertificateService:
             verification_token=token,
             qr_code_url=qr_url,
             issued_version=1,
-            issued_at=datetime.now(timezone.utc)
+            issued_at=datetime.now(UTC)
         )
         self.db.add(cert)
         self.db.commit()
@@ -115,11 +117,15 @@ class CertificateService:
         secondary_color = branding.secondary_color if branding and branding.secondary_color else "#3b82f6"
         logo_url = branding.logo_url if branding and branding.logo_url else ""
         signature_url = branding.certificate_signature_url if branding and branding.certificate_signature_url else ""
-        org_name = branding.organization.name if branding and branding.organization else "Telite Learning"
         
-        issued_date = datetime.now(timezone.utc).strftime("%B %d, %Y")
+        issued_date = datetime.now(UTC).strftime("%B %d, %Y")
         cert_id = cert_hash[:8].upper()
-        
+        qr_data_url = ""
+        if WEASYPRINT_AVAILABLE:
+            buffer = io.BytesIO()
+            qrcode.make(qr_url).save(buffer, format="PNG")
+            qr_data_url = "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -356,7 +362,7 @@ class CertificateService:
                     </div>
                     
                     <div class="qr-section">
-                        <img src="https://api.qrserver.com/v1/create-qr-code/?size=100x100&data={qr_url}" class="qr-code" alt="QR Code" />
+                        <img src="{qr_data_url}" class="qr-code" alt="QR Code" />
                         <p class="qr-text">Scan to verify</p>
                     </div>
                 </div>
@@ -365,7 +371,7 @@ class CertificateService:
         """
         
         if WEASYPRINT_AVAILABLE:
-            pdf_bytes = HTML(string=html_content).write_pdf()
+            pdf_bytes = HTML(string=html_content, url_fetcher=certificate_url_fetcher).write_pdf()
         else:
             logger.warning("WeasyPrint not installed. Generating mock PDF bytes.")
             pdf_bytes = b"%PDF-1.4 Mock PDF"
@@ -384,3 +390,11 @@ class CertificateService:
         target_path.write_bytes(data)
         
         logger.info(f"Saved PDF to local disk: {target_path} (size: {len(data)} bytes)")
+
+
+def certificate_url_fetcher(url, *args, **kwargs):
+    """PDF rendering cannot exfiltrate tokens or fetch local/private network files."""
+    if not url.startswith("data:image/") or len(url) > 2_000_000:
+        raise ValueError("Certificate resources must be embedded bounded image data")
+    from weasyprint import default_url_fetcher
+    return default_url_fetcher(url, *args, **kwargs)

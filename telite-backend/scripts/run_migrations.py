@@ -23,6 +23,7 @@ def _use_migration_database_url() -> None:
     if not migration_url:
         return
     os.environ["TELITE_DATABASE_URL"] = migration_url
+    os.environ["TELITE_DB_CONNECTION_PURPOSE"] = "migration"
     dispose_engine()
 
 
@@ -53,15 +54,9 @@ def _repair_orphan_references() -> None:
 def main() -> int:
     _use_migration_database_url()
     
-    # Debug: print database connection info
-    import os
-    print(f"TELITE_DATABASE_URL: {os.getenv('TELITE_DATABASE_URL', 'NOT SET')[:50] if os.getenv('TELITE_DATABASE_URL') else 'NOT SET'}...")
-    print(f"TELITE_POSTGRES_HOST: {os.getenv('TELITE_POSTGRES_HOST', 'NOT SET')}")
-    print(f"TELITE_POSTGRES_PORT: {os.getenv('TELITE_POSTGRES_PORT', 'NOT SET')}")
-    
     engine = get_engine()
-    print(f"Engine URL: {engine.url}")
-    
+    print("Applying schema migrations using the configured migration connection")
+
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
 
@@ -70,9 +65,11 @@ def main() -> int:
     if "alembic_version" not in tables:
         legacy_tables = {"users", "organizations", "courses"}
         if legacy_tables.issubset(tables):
-            print("Legacy schema detected without Alembic history — stamping head")
-            subprocess.run(["alembic", "stamp", "head"], check=True)
-            return 0
+            raise RuntimeError(
+                "Legacy schema has no migration history. Reconcile its actual revision "
+                "and stamp that verified revision before upgrading; never stamp head "
+                "and silently skip authorization data/policy migrations."
+            )
 
         print("Fresh database — running Alembic upgrade")
         subprocess.run(["alembic", "upgrade", "head"], check=True)

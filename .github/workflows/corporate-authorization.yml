@@ -1,0 +1,63 @@
+name: Corporate authorization isolation
+on:
+  pull_request:
+  push:
+    branches: [main, 'corporate/**']
+permissions:
+  contents: read
+jobs:
+  authorization:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: telite-backend
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: telite_authorization_ci
+          POSTGRES_USER: telite_migrator
+          POSTGRES_PASSWORD: synthetic-ci-migration-password
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U telite_migrator -d telite_authorization_ci"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      ENVIRONMENT: development
+      PYTHONPATH: .
+      TELITE_DATABASE_URL: postgresql+psycopg://telite_migrator:synthetic-ci-migration-password@localhost:5432/telite_authorization_ci
+      TELITE_TEST_DATABASE_URL: postgresql+psycopg://telite_migrator:synthetic-ci-migration-password@localhost:5432/telite_authorization_ci
+      TELITE_MIGRATION_DATABASE_URL: postgresql+psycopg://telite_migrator:synthetic-ci-migration-password@localhost:5432/telite_authorization_ci
+      TELITE_AUTH_RUNTIME_TEST_URL: postgresql+psycopg://telite_runtime:synthetic-ci-runtime-password@localhost:5432/telite_authorization_ci
+      TELITE_RUNTIME_POSTGRES_USER: telite_runtime
+      TELITE_RUNTIME_POSTGRES_PASSWORD: synthetic-ci-runtime-password
+      TELITE_AUTH_SECRET: synthetic-ci-auth-secret-more-than-32-characters
+      TELITE_PASSWORD_SALT: synthetic-ci-salt
+      REDIS_ENABLED: 'false'
+      MOODLE_MODE: mock
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements-dev.txt
+      - name: Runtime authority and assignment revocation regressions
+        run: pytest -q tests/test_authorization_runtime.py tests/test_runtime_database_role.py tests/test_rbac_media_permissions.py tests/test_assignment_enrollment_security.py tests/test_certificate_resource_security.py tests/test_notification_delivery_adapter.py
+      - name: Fresh migrated schema and non-owner runtime grants
+        run: |
+          alembic upgrade head
+          python -m scripts.ensure_runtime_db_role
+      - name: Actual PostgreSQL non-owner tenant guard
+        env:
+          TELITE_RUN_AUTH_POSTGRES_TESTS: '1'
+        run: pytest -q tests/test_authorization_postgres.py --junitxml=test-results/corporate-isolation.xml
+      - name: Backward-compatible migration rollback and re-upgrade
+        run: |
+          alembic downgrade -1
+          alembic upgrade head
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: corporate-isolation-results
+          path: telite-backend/test-results/*.xml

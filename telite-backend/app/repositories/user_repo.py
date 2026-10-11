@@ -10,16 +10,17 @@ set_user_active, soft_delete_user, update_user_moodle_id, etc.
 from __future__ import annotations
 
 import uuid
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
-from sqlalchemy import or_, select, update, text
-from sqlalchemy.orm import Session
+from sqlalchemy import or_, select, text, update
 
-from app.models.user import User
-from app.models.membership import Membership
-from app.repositories.base_repo import BaseRepository
-from app.core.utils import slugify, initials
 from app.core.password_utils import hash_password
+from app.core.utils import initials, slugify
+from app.models.membership import Membership
+from app.models.user import User
+from app.repositories.base_repo import BaseRepository
+
 
 def role_gradients(role: str | None) -> tuple[str, str]:
     if role == "super_admin":
@@ -170,6 +171,8 @@ class UserRepository(BaseRepository[User]):
         )
         self.session.add(user)
         self.session.flush()
+        if not is_platform_admin:
+            self.upsert_membership(user_id=user.id, org_id=org_id, role=role, category_scope=category_scope)
         return user
 
     def update_password(self, user: User, new_password: str) -> User:
@@ -189,6 +192,14 @@ class UserRepository(BaseRepository[User]):
         grad_start, grad_end = role_gradients(role)
         user.gradient_start = grad_start
         user.gradient_end = grad_end
+        # Legacy home-role editor updates the authoritative home membership too,
+        # without reactivating a suspended membership.
+        membership = self.session.execute(select(Membership).where(
+            Membership.user_id == user.id, Membership.org_id == user.org_id,
+        )).scalar_one_or_none()
+        if membership:
+            membership.role = role
+            membership.category_scope = category_scope
         self.session.flush()
         return user
 

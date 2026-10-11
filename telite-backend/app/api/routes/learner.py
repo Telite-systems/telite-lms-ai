@@ -156,7 +156,7 @@ def get_learner_course(
     Serves snapshot-frozen content when learner has an enrolled_version.
     Returns sections ordered by sort_order ASC, modules ordered by sort_order ASC within sections."""
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(current_user.id, id, current_user.org_id):
+    if not enrollment_repo.has_access(current_user.id, id, current_user.org_id, actor=current_user):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
 
     learner_repo = LearnerRepository(db)
@@ -310,7 +310,7 @@ def get_learner_module(
         raise HTTPException(status_code=404, detail="Module not found")
         
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(current_user.id, module.course_id, current_user.org_id):
+    if not enrollment_repo.has_access(current_user.id, module.course_id, current_user.org_id, actor=current_user):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
     
     # Check progression rules
@@ -341,7 +341,7 @@ def update_progress(
     """Update learner progress for course, sections, and modules.
     Updates section progress based on module completion within each section."""
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(current_user.id, req.course_id, current_user.org_id):
+    if not enrollment_repo.has_access(current_user.id, req.course_id, current_user.org_id, actor=current_user):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
 
     progress_repo = ProgressRepository(db)
@@ -525,7 +525,7 @@ def heartbeat(
 ):
     """Record offline heartbeat and time spent."""
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(current_user.id, req.course_id, current_user.org_id):
+    if not enrollment_repo.has_access(current_user.id, req.course_id, current_user.org_id, actor=current_user):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
 
     now = datetime.utcnow()
@@ -606,7 +606,7 @@ def record_events(
     enrollment_repo = EnrollmentRepository(db)
     events = []
     for ev in req.events:
-        if ev.course_id and not enrollment_repo.has_access(current_user.id, ev.course_id, current_user.org_id):
+        if ev.course_id and not enrollment_repo.has_access(current_user.id, ev.course_id, current_user.org_id, actor=current_user):
             raise HTTPException(status_code=403, detail="Not enrolled or access denied")
 
         events.append(LearnerEvent(
@@ -654,7 +654,7 @@ def get_module_progress(
     """Get all module progress for a course.
     Returns a mapping of module_id -> status for all modules in the course."""
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(current_user.id, course_id, current_user.org_id):
+    if not enrollment_repo.has_access(current_user.id, course_id, current_user.org_id, actor=current_user):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
 
     # Get all modules for this course
@@ -694,7 +694,7 @@ def resume_course(
     Returns modules in sequential order (sections by sort_order, modules by sort_order within sections).
     If course is completed, returns the last module."""
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(current_user.id, course_id, current_user.org_id):
+    if not enrollment_repo.has_access(current_user.id, course_id, current_user.org_id, actor=current_user):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
 
     progress_repo = ProgressRepository(db)
@@ -791,7 +791,7 @@ def submit_course(
     Validates that all modules are completed, marks course as submitted,
     and triggers certificate generation."""
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(current_user.id, course_id, current_user.org_id):
+    if not enrollment_repo.has_access(current_user.id, course_id, current_user.org_id, actor=current_user):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
 
     progress_repo = ProgressRepository(db)
@@ -911,15 +911,15 @@ from app.models.lesson_block_progress import LessonBlockProgress
 
 from app.services.snapshot_resolver import SnapshotResolver
 
-def _resolve_block_for_learner(block_id: int, db: Session, user_id: str, org_id: int):
+def _resolve_block_for_learner(block_id: int, db: Session, user_id: str, org_id: int, *, actor: TokenData):
     block_with_course = db.query(LessonBlock.block_type, CourseModule.course_id).join(
         CourseModule, LessonBlock.module_id == CourseModule.id
     ).filter(LessonBlock.id == block_id, LessonBlock.org_id == org_id).first()
     if not block_with_course:
         raise HTTPException(status_code=404, detail="Block not found in database")
-    _, course_id = block_with_course
+    block_type, course_id = block_with_course
     enrollment_repo = EnrollmentRepository(db)
-    if not enrollment_repo.has_access(user_id, course_id, org_id):
+    if not enrollment_repo.has_access(user_id, course_id, org_id, require_enrollment=block_type == "quiz", actor=actor):
         raise HTTPException(status_code=403, detail="Not enrolled or access denied")
     resolver = SnapshotResolver(db)
     try:
@@ -937,7 +937,7 @@ async def submit_quiz(
     db: Session = Depends(db_session),
     current_user: TokenData = Depends(get_current_user)
 ):
-    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id)
+    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id, actor=current_user)
     if block.get("block_type") not in ("quiz", "native_quiz"):
         raise HTTPException(status_code=400, detail="Block is not a quiz")
     
@@ -1075,7 +1075,7 @@ async def poll_vote(
     db: Session = Depends(db_session),
     current_user: TokenData = Depends(get_current_user)
 ):
-    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id)
+    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id, actor=current_user)
     if block.get("block_type") != "poll":
         raise HTTPException(status_code=400, detail="Block is not a poll")
     
@@ -1127,7 +1127,7 @@ async def poll_results(
     db: Session = Depends(db_session),
     current_user: TokenData = Depends(get_current_user)
 ):
-    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id)
+    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id, actor=current_user)
     if block.get("block_type") != "poll":
         raise HTTPException(status_code=400, detail="Block is not a poll")
     
@@ -1169,7 +1169,7 @@ def download_resource(
     current_user: TokenData = Depends(get_current_user)
 ):
     """Return a download URL for a resource collection asset."""
-    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id)
+    block, course_id = _resolve_block_for_learner(block_id, db, current_user.id, current_user.org_id, actor=current_user)
     if block.get("block_type") != "resource_collection":
         raise HTTPException(status_code=400, detail="Block is not a resource collection")
     

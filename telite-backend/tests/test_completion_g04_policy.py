@@ -6,7 +6,7 @@ import uuid
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.core.security import create_access_token
+from conftest import authenticated_token
 from app.models.course import Course
 from app.models.course_module import CourseModule
 from app.models.course_progress import CourseProgress
@@ -142,8 +142,8 @@ def _course_grade(db: Session, user: User, course: Course, *, passed: bool, perc
     return grade
 
 
-def _auth_headers(user: User) -> dict[str, str]:
-    token = create_access_token(payload={"sub": user.id, "org_id": user.org_id})
+def _auth_headers(db: Session, user: User) -> dict[str, str]:
+    token = authenticated_token(db, user.id, user.org_id)
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -245,8 +245,8 @@ def test_progress_endpoint_emits_course_completed_once_for_content_only_course(
         "course_id": course.id,
         "module_updates": [{"module_id": module.id, "status": "completed"}],
     }
-    first = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(user))
-    second = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(user))
+    first = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(db_session, user))
+    second = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(db_session, user))
 
     assert first.status_code == 200
     assert first.json()["course_status"] == "completed"
@@ -275,7 +275,7 @@ def test_progress_endpoint_keeps_grade_aware_course_pending_until_passed(
         "course_id": course.id,
         "module_updates": [{"module_id": module.id, "status": "completed"}],
     }
-    pending = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(user))
+    pending = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(db_session, user))
     assert pending.status_code == 200
     assert pending.json()["course_status"] == "pending_grade"
     assert (
@@ -288,7 +288,7 @@ def test_progress_endpoint_keeps_grade_aware_course_pending_until_passed(
     _course_grade(db_session, user, course, passed=True, percentage=88)
     db_session.commit()
 
-    completed = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(user))
+    completed = client.post("/api/v1/learner/progress", json=payload, headers=_auth_headers(db_session, user))
     assert completed.status_code == 200
     assert completed.json()["course_status"] == "completed"
     assert (

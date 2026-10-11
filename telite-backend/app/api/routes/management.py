@@ -232,10 +232,9 @@ def post_admin(
         existing = user_repo.get_by_email(body.email)
         if existing:
             # Update existing
-            existing.role = body.role
+            user_repo.update_role(existing, role=body.role,
+                                  category_scope=body.category_scope or existing.category_scope)
             existing.full_name = body.full_name
-            if body.category_scope:
-                existing.category_scope = body.category_scope
             if body.password:
                 user_repo.update_password(existing, body.password)
             db.commit()
@@ -285,9 +284,8 @@ def patch_admin(
     try:
         existing.full_name = body.full_name
         existing.email = body.email
-        existing.role = body.role
-        if body.category_scope is not None:
-            existing.category_scope = body.category_scope
+        user_repo.update_role(existing, role=body.role,
+                              category_scope=body.category_scope if body.category_scope is not None else existing.category_scope)
         if body.username:
             existing.username = body.username
         if body.password:

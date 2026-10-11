@@ -581,3 +581,25 @@ def send_signup_rejection_email(to_email: str, name: str, role: str, reason: str
     except Exception as exc:
         print(f"[EMAIL ERROR] Rejection email failed: {exc}")
         return False
+
+
+def _dispatch_notification_email(
+    *, to_email: str, name: str, title: str, body: str, notif_type: str = "info",
+) -> bool:
+    """Delivery adapter used by notification workers; missing SMTP fails closed."""
+    if not SMTP_USER or not SMTP_PASSWORD:
+        return False
+    try:
+        message = MIMEText(f"Hello {name},\n\n{body}", "plain", "utf-8")
+        message["Subject"] = title
+        message["From"] = f"{FROM_NAME} <{SMTP_USER}>"
+        message["To"] = to_email
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+            server.ehlo()
+            server.starttls()
+            server.ehlo()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            refused = server.sendmail(SMTP_USER, [to_email], message.as_string())
+        return not refused
+    except (smtplib.SMTPException, OSError, ValueError):
+        return False

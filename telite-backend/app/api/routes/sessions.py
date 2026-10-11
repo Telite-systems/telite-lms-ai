@@ -14,33 +14,31 @@ can be logged into multiple organisations simultaneously.
 from __future__ import annotations
 
 import logging
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from app.api.auth import (
     TokenData,
     _account_refresh_cookie_name,
-    _set_auth_cookies,
-    _clear_auth_cookies,
     _build_token_response,
+    _clear_auth_cookies,
+    _set_auth_cookies,
     get_current_user,
     issue_login_response,
     require_platform_admin,
+    validate_auth_cookie_mutation,
 )
 from app.core.security import generate_csrf_token
-from app.core.password_utils import verify_password
-from sqlalchemy.orm import Session
 from app.db.engine import db_session
-from app.repositories.user_repo import UserRepository
 from app.repositories.auth_repo import AuthRepository
 
 logger = logging.getLogger("telite.sessions")
 
-sessions_router = APIRouter(prefix="/auth/sessions", tags=["Sessions"])
+sessions_router = APIRouter(prefix="/auth/sessions", tags=["Sessions"], dependencies=[Depends(validate_auth_cookie_mutation)])
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -88,8 +86,7 @@ def list_sessions(
     result = []
     for s in sessions:
         is_current = (
-            cookie_refresh is not None
-            and s.refresh_token == cookie_refresh
+            s.id == current_user.session_id
         )
         result.append(
             SessionInfo(
@@ -129,7 +126,7 @@ def revoke_one_session(
     if session.user_id != current_user.id and not current_user.is_platform_admin:
         raise HTTPException(status_code=403, detail="Cannot revoke another user's session")
 
-    session.revoked_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    session.revoked_at = datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S")
     db.commit()
 
     # If revoking current session, clear cookies too
@@ -177,47 +174,12 @@ def switch_org_context(
     """
     Switch the current user's active org context.
     """
-    user_repo = UserRepository(db)
-    user = user_repo.get_by_id(current_user.id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    memberships = user_repo.get_memberships(current_user.id)
-    org_ids = {m.org_id for m in memberships}
-    if user.org_id:
-        org_ids.add(user.org_id)
-
-    if not current_user.is_platform_admin and body.target_org_id not in org_ids:
-        raise HTTPException(
-            status_code=403,
-            detail=f"You do not have access to organisation {body.target_org_id}",
-        )
-
-    # Temporarily mutate object for token generation
-    user.org_id = body.target_org_id
-    
-    if not current_user.is_platform_admin:
-        for m in memberships:
-            if m.org_id == body.target_org_id:
-                user.role = m.role
-                user.category_scope = m.category_scope
-                break
-
-    token_response = issue_login_response(db, user, response, request)
-    # We do NOT commit(), so the mutation is temporary.
-
-    logger.info(
-        "User %s switched org context to %d",
-        current_user.id,
-        body.target_org_id,
-    )
-
+    from app.services.authorization_service import load_identity
+    user = load_identity(db, current_user.id)
+    token_response = issue_login_response(db, user, response, request, org_id=body.target_org_id)
     return {
-        "status": "org_switched",
-        "user_id": current_user.id,
-        "org_id": body.target_org_id,
-        "role": user.role,
-        "permissions": token_response.permissions,
+        "status": "org_switched", "user_id": user.id, "org_id": token_response.org_id,
+        "role": token_response.role, "permissions": token_response.permissions,
     }
 
 
@@ -231,19 +193,8 @@ def add_account(
     """
     Add a second account to the browser session (multi-account switcher).
     """
-    user_repo = UserRepository(db)
-    user = user_repo.get_by_identifier(body.username, include_hash=True)
-    
-    if not user or not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
-    if not verify_password(body.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials",
-        )
+    from app.api.auth import authenticate_user
+    user = authenticate_user(db, body.username, body.password)
 
     token_response = issue_login_response(db, user, response, request)
 
@@ -279,43 +230,22 @@ def switch_browser_account(
             detail="Account session is not available on this browser. Add the account again.",
         )
 
-    auth_repo = AuthRepository(db)
-    session = auth_repo.get_by_token(refresh_token)
-    if not session or session.user_id != body.target_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Account session has expired or was revoked.",
-        )
-
-    user_repo = UserRepository(db)
-    user = user_repo.get_by_id(body.target_user_id)
-    if not user or not user.is_active:
-        raise HTTPException(status_code=401, detail="User is inactive")
-
-    if session.org_id is not None:
-        user.org_id = session.org_id
-        
-    token_response = _build_token_response(user, refresh_token)
-    csrf_token = generate_csrf_token()
-    _set_auth_cookies(
-        response,
-        token_response.access_token,
-        refresh_token,
-        csrf_token,
-        account_user_id=user.id,
-    )
-
-    logger.info("Browser switched active account to user=%s", user.id)
+    from app.core.security import decode_token
+    from app.services.authorization_service import authenticate_payload, denied
+    payload = decode_token(refresh_token, token_type="refresh")
+    if payload.get("sub") != body.target_user_id:
+        raise denied()
+    authority, session = authenticate_payload(db, payload)
+    if session.refresh_token != refresh_token:
+        raise denied()
+    token_response = _build_token_response(authority, refresh_token, db=db, session_id=session.id)
+    _set_auth_cookies(response, token_response.access_token, refresh_token,
+                      generate_csrf_token(), account_user_id=authority["id"])
     return {
-        "status": "account_switched",
-        "user_id": user.id,
-        "role": user.role,
-        "name": user.full_name,
-        "email": user.email,
-        "category_scope": user.category_scope,
-        "org_id": user.org_id,
-        "is_platform_admin": bool(user.is_platform_admin),
-        "permissions": token_response.permissions,
+        "status": "account_switched", "user_id": authority["id"], "role": authority["role"],
+        "name": authority["full_name"], "email": authority["email"],
+        "category_scope": authority["category_scope"], "org_id": authority["org_id"],
+        "is_platform_admin": authority["is_platform_admin"], "permissions": authority["permissions"],
     }
 
 

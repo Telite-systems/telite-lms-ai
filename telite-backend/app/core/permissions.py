@@ -40,11 +40,10 @@ def resolve_permissions(
             )
             .all()
         )
-        for override in overrides:
-            if override.enabled:
-                permissions.add(override.permission_key)
-            else:
-                permissions.discard(override.permission_key)
+        # Legacy data can have duplicate overrides. Denial wins regardless of
+        # query ordering until that data is normalized.
+        permissions.update(o.permission_key for o in overrides if o.enabled)
+        permissions.difference_update(o.permission_key for o in overrides if not o.enabled)
 
     return sorted(permissions)
 
@@ -114,15 +113,10 @@ def check_capability(db: Session, current_user: TokenData, permission_key: str) 
     Synchronously check capability when the required permission depends on the request payload.
     Raises 403 Forbidden if the user lacks the capability.
     """
-    if current_user.role == "super_admin":
-        return True
-
-    capability = db.query(RolePermission).filter(
-        RolePermission.org_id == current_user.org_id,
-        RolePermission.role == current_user.role,
-        RolePermission.permission_key == permission_key,
-        RolePermission.enabled == True
-    ).first()
+    capability = permission_key in resolve_permissions(
+        current_user.role, current_user.is_platform_admin, current_user.category_scope,
+        current_user.org_id, db,
+    ) or current_user.is_platform_admin
 
     if not capability:
         AuditService.log(

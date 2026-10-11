@@ -12,7 +12,7 @@ PHASE 2 SECURITY HARDENING:
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 from fastapi import Depends, HTTPException, status
 
@@ -28,6 +28,10 @@ logger = logging.getLogger("telite.rbac")
 # ── Permission constants ──────────────────────────────────────────────────────
 
 class Permission:
+    # Reserved corporate capabilities; future endpoints must add object scopes.
+    TEAM_VIEW_READINESS = "team.view_readiness"
+    COMPETENCY_REVIEW = "competency.review"
+    KNOWLEDGE_MANAGE = "knowledge.manage"
     # Platform-level
     PLATFORM_MANAGE_ORGS = "platform.manage_orgs"
     PLATFORM_VIEW_ANALYTICS = "platform.view_analytics"
@@ -222,7 +226,18 @@ ROLE_PERMISSIONS: dict[str, set[str]] = {
         Permission.H5P_VIEW,
         Permission.AUTHORING_MANAGE_QUESTIONS,
     },
+    "manager": {
+        Permission.TEAM_VIEW_READINESS,
+        Permission.LEARNER_VIEW_COURSES,
+        Permission.LEARNER_VIEW_PROGRESS,
+    },
+    "content_owner": {
+        Permission.KNOWLEDGE_MANAGE,
+        Permission.LEARNER_VIEW_COURSES,
+        Permission.LEARNER_VIEW_PROGRESS,
+    },
     "reviewer": {
+        Permission.COMPETENCY_REVIEW,
         Permission.AUTHORING_APPROVE_REJECT,
         Permission.AUTHORING_VIEW_AUDIT_LOG,
         Permission.LEARNER_VIEW_COURSES,
@@ -246,16 +261,17 @@ def has_permission(user: TokenData, permission: str) -> bool:
     """
     Check if a user has a specific permission.
 
-    Platform admins always have all permissions. Phase 4 prefers signed JWT
-    permission claims, with the matrix retained as a compatibility fallback.
+    Platform admins retain the existing platform bypass contract. HTTP permissions
+    are resolved from current membership and tenant overrides, never JWT claims.
     """
     if user.is_platform_admin:
         return True
-    if permission in (user.permissions or []):
-        return True
-
-    role = user.role or "learner"
-    return permission in ROLE_PERMISSIONS.get(role, set())
+    # None is only an internal legacy actor without resolved claims. HTTP actors
+    # always contain a freshly resolved list; an explicit empty list denies all.
+    permissions = user.permissions
+    if permissions is None:
+        permissions = ROLE_PERMISSIONS.get(user.role or "learner", set())
+    return permission in permissions
 
 
 def require_permission(permission: str) -> Callable:

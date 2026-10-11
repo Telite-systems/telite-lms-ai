@@ -11,7 +11,7 @@ from app.models.enrollment import EnrollmentRequest
 from app.models.course_version import CourseVersion
 from app.models.course_progress import CourseProgress
 from app.models.organization import Organization
-from app.core.security import create_access_token
+from conftest import authenticated_token
 
 
 import uuid
@@ -205,6 +205,7 @@ def _create_native_quiz_course(
 
 def _create_version(db: Session, course_id: str, org_id: int, version_number: int, snapshot: dict):
     v = CourseVersion(
+        id=f"version-{uuid.uuid4().hex}",
         course_id=course_id,
         org_id=org_id,
         version_number=version_number,
@@ -224,7 +225,7 @@ def test_tenant_isolation_attack(client: TestClient, db_session: Session):
     _enroll_user(db_session, user_a.id, course_b, org_id=1)  # Maliciously enrolled by some bug
     db_session.commit()
     
-    token_a = create_access_token(payload={"sub": user_a.id, "org_id": 1})
+    token_a = authenticated_token(db_session, user_a.id, 1)
     
     # Org A tries to access Org B's poll results
     response = client.get(
@@ -257,7 +258,7 @@ def test_save_native_quiz_block_without_bank_reference_metadata(client: TestClie
     db_session.add(module)
     db_session.commit()
 
-    token = create_access_token(payload={"sub": admin_user.id, "org_id": admin_user.org_id})
+    token = authenticated_token(db_session, admin_user.id, admin_user.org_id)
 
     lock_resp = client.post(
         f"/authoring/courses/{course_id}/lock",
@@ -288,7 +289,7 @@ def test_save_native_quiz_block_without_bank_reference_metadata(client: TestClie
                     ]
                 },
                 "sort_order": 0,
-                "is_deleted": false
+                "is_deleted": False
             }
         ]
     }
@@ -319,13 +320,13 @@ def test_version_freeze_pinning(client: TestClient, db_session: Session):
     _create_version(db_session, course_id, org_id=1, version_number=1, snapshot=v1_snapshot)
     db_session.commit()
     
-    token = create_access_token(payload={"sub": user.id, "org_id": 1})
+    token = authenticated_token(db_session, user.id, 1)
     
     # Learner fetches course for the first time. They should be pinned to V1!
     res1 = client.get(f"/api/v1/learner/courses/{course_id}", headers={"Authorization": f"Bearer {token}"})
     assert res1.status_code == 200
     data1 = res1.json()
-    assert data1["modules_json"][0]["content"][0]["settings"]["question"] == "V1"
+    assert data1["sections"][0]["modules"][0]["content"][0]["settings"]["question"] == "V1"
     
     # Now Author creates V2
     v2_snapshot = {
@@ -338,7 +339,7 @@ def test_version_freeze_pinning(client: TestClient, db_session: Session):
     res2 = client.get(f"/api/v1/learner/courses/{course_id}", headers={"Authorization": f"Bearer {token}"})
     assert res2.status_code == 200
     data2 = res2.json()
-    assert data2["modules_json"][0]["content"][0]["settings"]["question"] == "V1"
+    assert data2["sections"][0]["modules"][0]["content"][0]["settings"]["question"] == "V1"
 
 
 def test_quiz_security_leakage(client: TestClient, db_session: Session):
@@ -357,13 +358,13 @@ def test_quiz_security_leakage(client: TestClient, db_session: Session):
     progress.enrolled_version = 1
     db_session.commit()
     
-    token = create_access_token(payload={"sub": user.id, "org_id": 1})
+    token = authenticated_token(db_session, user.id, 1)
     
     res = client.get(f"/api/v1/learner/courses/{course.id}", headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 200
     
     # Inspect the network payload
-    q_block = res.json()["modules_json"][0]["content"][0]
+    q_block = res.json()["sections"][0]["modules"][0]["content"][0]
     fetched_settings = q_block["settings"]
     
     # Verify correct answers are STRIPPED
@@ -376,7 +377,7 @@ def test_native_quiz_submission_enforces_enrollment(client: TestClient, db_sessi
     _, _, block = _create_native_quiz_course(db_session, org_id=1)
     db_session.commit()
 
-    token = create_access_token(payload={"sub": user.id, "org_id": 1})
+    token = authenticated_token(db_session, user.id, 1)
     res = client.post(
         f"/api/v1/learner/blocks/{block.id}/quiz/submit",
         headers={"Authorization": f"Bearer {token}"},
@@ -393,7 +394,7 @@ def test_native_quiz_submission_rejects_cross_course_access(client: TestClient, 
     _enroll_user(db_session, user.id, allowed_course.id, org_id=1)
     db_session.commit()
 
-    token = create_access_token(payload={"sub": user.id, "org_id": 1})
+    token = authenticated_token(db_session, user.id, 1)
     res = client.post(
         f"/api/v1/learner/blocks/{forbidden_block.id}/quiz/submit",
         headers={"Authorization": f"Bearer {token}"},
@@ -425,7 +426,7 @@ def test_native_quiz_max_attempts_enforced(client: TestClient, db_session: Sessi
     _enroll_user(db_session, user.id, course.id, org_id=1)
     db_session.commit()
 
-    token = create_access_token(payload={"sub": user.id, "org_id": 1})
+    token = authenticated_token(db_session, user.id, 1)
     first = client.post(
         f"/api/v1/learner/blocks/{block.id}/quiz/submit",
         headers={"Authorization": f"Bearer {token}"},
@@ -472,7 +473,7 @@ def test_native_quiz_passing_score_enforced(client: TestClient, db_session: Sess
     _enroll_user(db_session, user.id, course.id, org_id=1)
     db_session.commit()
 
-    token = create_access_token(payload={"sub": user.id, "org_id": 1})
+    token = authenticated_token(db_session, user.id, 1)
     failing = client.post(
         f"/api/v1/learner/blocks/{block.id}/quiz/submit",
         headers={"Authorization": f"Bearer {token}"},
@@ -498,7 +499,7 @@ def test_assignment_submission_ui_flow(client: TestClient, db_session: Session):
     _enroll_user(db_session, user.id, course_id, org_id=1)
     db_session.commit()
     
-    token = create_access_token(payload={"sub": user.id, "org_id": 1})
+    token = authenticated_token(db_session, user.id, 1)
     
     # Submit assignment
     res_sub = client.post(
