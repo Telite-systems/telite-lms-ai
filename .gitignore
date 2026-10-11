@@ -94,6 +94,10 @@ id_ed25519*
 *.tar
 *.tar.gz
 *.tgz
+*.zip
+*.7z
+*.rar
+/backups/
 /moodle.sql
 pgdata/
 moodledata/

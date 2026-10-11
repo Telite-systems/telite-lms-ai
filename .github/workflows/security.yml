@@ -23,6 +23,19 @@ env:
   TRUFFLEHOG_IMAGE: trufflesecurity/trufflehog:3.90.8
 
 jobs:
+  source-artifacts:
+    name: Source artifact hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify source artifact gate
+        run: python -m unittest discover -s .github/scripts -p 'test_source_artifacts.py'
+      - name: Reject tracked backups and credential files
+        run: python .github/scripts/check-source-artifacts.py
+
   secrets:
     name: Secret scanning
     runs-on: ubuntu-latest
@@ -33,31 +46,15 @@ jobs:
           fetch-depth: 0
 
       - name: Gitleaks
-        env:
-          GITHUB_EVENT_NAME: ${{ github.event_name }}
-          GITHUB_EVENT_BEFORE: ${{ github.event.before }}
-          GITHUB_SHA: ${{ github.sha }}
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            RANGE="${PR_BASE_SHA}..${PR_HEAD_SHA}"
-          elif [[ "$GITHUB_EVENT_BEFORE" != "0000000000000000000000000000000000000000" ]]; then
-            RANGE="${GITHUB_EVENT_BEFORE}..${GITHUB_SHA}"
-          else
-            RANGE="${GITHUB_SHA}"
-          fi
-
-          echo "Scanning commit range: $RANGE"
 
           docker run --rm \
             -v "$PWD:/repo" \
             -w /repo \
             "$GITLEAKS_IMAGE" detect \
             --source=/repo \
-            --log-opts="$RANGE" \
+            --log-opts="--all" \
             --gitleaks-ignore-path=/repo/.gitleaksignore \
             --redact \
             --verbose
