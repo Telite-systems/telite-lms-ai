@@ -128,14 +128,18 @@ def test_http_runtime_authority_and_concurrent_refresh(runtime):
     def refresh(_):
         independent_client = TestClient(app)
         try:
-            return independent_client.post("/auth/refresh", json={"refresh_token": token.refresh_token}).status_code
+            return independent_client.post("/auth/refresh", json={"refresh_token": token.refresh_token})
         finally:
             independent_client.close()
     with ThreadPoolExecutor(max_workers=2) as pool:
-        assert sorted(pool.map(refresh, range(2))) == [200, 401]
+        responses = list(pool.map(refresh, range(2)))
+    assert sorted(response.status_code for response in responses) == [200, 401]
+    renewed = next(response.json() for response in responses if response.status_code == 200)
+    renewed_headers = {"Authorization": f"Bearer {renewed["access_token"]}"}
+    assert client.get("/auth/me", headers=renewed_headers).status_code == 200
     assert client.get("/auth/me", headers=headers).status_code == 401
     with admin.begin() as conn:
         conn.execute(text("UPDATE memberships SET status='suspended' WHERE user_id='synthetic-s1-a'"))
-    assert client.get("/auth/me", headers=headers).status_code == 401
+    assert client.get("/auth/me", headers=renewed_headers).status_code == 401
     with admin.begin() as conn:
         conn.execute(text("UPDATE memberships SET status='active' WHERE user_id='synthetic-s1-a'"))
