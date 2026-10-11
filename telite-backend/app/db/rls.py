@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger("telite.db.rls")
@@ -24,6 +24,14 @@ logger = logging.getLogger("telite.db.rls")
 # Tables that require tenant isolation via RLS
 TENANT_SCOPED_TABLES = [
     "activity_log",
+    "allowed_domains",
+    "assignment_submissions",
+    "media_asset_usages",
+    "progression_rules",
+    "section_progress",
+    "task_assignments",
+    "task_submissions",
+    "task_reviews",
     "alert_rules",
     "announcement_audiences",
     "announcement_read_states",
@@ -97,6 +105,7 @@ TENANT_SCOPED_TABLES = [
 TABLE_ORG_COLUMN = {
     table: "org_id" for table in TENANT_SCOPED_TABLES
 }
+TABLE_ORG_COLUMN["organization_branding"] = "organization_id"
 
 
 def apply_rls_policies(session: Session) -> None:
@@ -142,7 +151,7 @@ def apply_rls_policies(session: Session) -> None:
             session.execute(
                 text(
                     f"""
-                    CREATE POLICY {policy_name} ON {table}
+                    CREATE POLICY {policy_name} ON {table} AS RESTRICTIVE
                     USING (
                         current_setting('app.bypass_rls', true) = 'on'
                         OR {org_col} = NULLIF(current_setting('app.current_org_id', true), '')::INTEGER
@@ -154,6 +163,20 @@ def apply_rls_policies(session: Session) -> None:
                     """
                 )
             )
+            # Preserve specialized actor policies. Only establish a permissive
+            # tenant policy where no permissive policy already exists.
+            permissive = session.execute(text(
+                "SELECT 1 FROM pg_policies WHERE schemaname = current_schema() "
+                "AND tablename = :table AND permissive = 'PERMISSIVE' LIMIT 1"
+            ), {"table": table}).scalar()
+            if not permissive:
+                session.execute(text(
+                    f"CREATE POLICY tenant_default_access ON {table} FOR ALL "
+                    f"USING ({org_col} = NULLIF(current_setting('app.current_org_id', true), '')::integer "
+                    "OR current_setting('app.bypass_rls', true) = 'on') "
+                    f"WITH CHECK ({org_col} = NULLIF(current_setting('app.current_org_id', true), '')::integer "
+                    "OR current_setting('app.bypass_rls', true) = 'on')"
+                ))
             applied += 1
             logger.debug("RLS policy applied to table: %s", table)
 
@@ -170,31 +193,36 @@ def apply_rls_policies(session: Session) -> None:
 
 def set_rls_context(session: Session, org_id: int) -> None:
     """Set the RLS context for the current transaction."""
-    from app.db.engine import is_postgres_dsn
-    if not is_postgres_dsn():
+    session.info["telite_rls_context"] = {"org_id": str(org_id), "bypass": "off"}
+    if session.get_bind().dialect.name != "postgresql":
         return
     session.execute(
         text("SELECT set_config('app.current_org_id', :org_id, true)"),
         {"org_id": str(org_id)},
     )
     session.execute(text("SELECT set_config('app.bypass_rls', 'off', true)"))
+    session.execute(text("SELECT set_config('app.current_user_id', '', true)"))
+    session.execute(text("SELECT set_config('app.current_user_role', '', true)"))
 
 
 def set_platform_context(session: Session) -> None:
     """Bypass RLS for platform-level operations."""
-    from app.db.engine import is_postgres_dsn
-    if not is_postgres_dsn():
+    context = session.info.get("telite_rls_context", {})
+    session.info["telite_rls_context"] = {"org_id": context.get("org_id", ""), "bypass": "on"}
+    if session.get_bind().dialect.name != "postgresql":
         return
     session.execute(text("SELECT set_config('app.bypass_rls', 'on', true)"))
 
 
 def clear_rls_context(session: Session) -> None:
     """Clear/reset the RLS context for the current transaction."""
-    from app.db.engine import is_postgres_dsn
-    if not is_postgres_dsn():
+    session.info.pop("telite_rls_context", None)
+    if session.get_bind().dialect.name != "postgresql":
         return
     session.execute(text("SELECT set_config('app.current_org_id', '', true)"))
     session.execute(text("SELECT set_config('app.bypass_rls', 'off', true)"))
+    session.execute(text("SELECT set_config('app.current_user_id', '', true)"))
+    session.execute(text("SELECT set_config('app.current_user_role', '', true)"))
 
 
 def verify_rls_active(session: Session, table: str) -> bool:
@@ -214,3 +242,26 @@ def verify_rls_active(session: Session, table: str) -> bool:
         {"table": table},
     ).fetchone()
     return bool(result and result[0])
+
+
+@event.listens_for(Session, "after_begin")
+def _restore_transaction_context(session, transaction, connection):
+    """SET LOCAL expires at commit; restore only this session's verified scope."""
+    if connection.dialect.name != "postgresql":
+        return
+    context = session.info.get("telite_rls_context", {})
+    connection.execute(text("SELECT set_config('app.current_org_id', :org, true)"),
+                       {"org": context.get("org_id", "")})
+    connection.execute(text("SELECT set_config('app.bypass_rls', :bypass, true)"),
+                       {"bypass": context.get("bypass", "off")})
+    for key in ("user_id", "user_role"):
+        connection.execute(text(f"SELECT set_config('app.current_{key}', :value, true)"),
+                           {"value": context.get(key, "")})
+
+
+def set_actor_context(session: Session, user_id: str, role: str) -> None:
+    context = session.info.setdefault("telite_rls_context", {"org_id": "", "bypass": "off"})
+    context.update(user_id=user_id, user_role=role)
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(text("SELECT set_config('app.current_user_id', :value, true)"), {"value": user_id})
+        session.execute(text("SELECT set_config('app.current_user_role', :value, true)"), {"value": role})

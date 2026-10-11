@@ -63,3 +63,19 @@ def db_session(engine):
     finally:
         session.rollback()
         session.close()
+
+
+def authenticated_token(db, user_id, org_id):
+    """Synthetic fixture: explicit membership and a real server-issued session."""
+    from fastapi import Response
+    from app.api.auth import issue_login_response
+    from app.models.membership import Membership
+    from app.models.user import User
+    user = db.get(User, user_id)
+    if not db.query(Membership).filter_by(user_id=user_id, org_id=org_id).first():
+        db.add(Membership(user_id=user_id, org_id=org_id, role=user.role,
+                          category_scope=user.category_scope, status="active"))
+        db.flush()
+    token = issue_login_response(db, user, Response(), org_id=org_id).access_token
+    db.commit()
+    return token

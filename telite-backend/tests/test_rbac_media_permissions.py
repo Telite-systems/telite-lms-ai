@@ -21,7 +21,7 @@ def _category_admin(permissions: list[str] | None = None) -> TokenData:
         full_name="Category Admin",
         category_scope="backend-development",
         org_id=1,
-        permissions=permissions or [],
+        permissions=resolve_permissions("category_admin") if permissions is None else permissions,
     )
 
 

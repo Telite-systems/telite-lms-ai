@@ -1,24 +1,23 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from fastapi import HTTPException, UploadFile, status
-from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.auth import TokenData
-from app.db.rls import set_platform_context, set_rls_context
+from app.core.notification_payloads import assignment_graded_metadata
+from app.db.rls import set_actor_context, set_platform_context, set_rls_context
 from app.models.assignment_submission import AssignmentSubmission
 from app.models.learner_event import LearnerEvent
 from app.models.lesson_block_progress import LessonBlockProgress
 from app.models.notification import NotificationType
-from app.core.notification_payloads import assignment_graded_metadata
 from app.repositories.assignment_repo import AssignmentRepository
 from app.repositories.enrollment_repo import EnrollmentRepository
 from app.repositories.notification_repo import NotificationRepository
 from app.repositories.progress_repo import ProgressRepository
 from app.services.assignment_storage import StorageProvider, get_storage_provider
 from app.services.gradebook_service import GradebookService
-from datetime import datetime, timezone
-
 
 ADMIN_ROLES = {"platform_admin", "super_admin", "category_admin", "instructor", "author", "reviewer"}
 MUTABLE_STATUSES = {"draft", "returned"}
@@ -30,10 +29,7 @@ def set_assignment_actor_context(db: Session, user: TokenData) -> None:
     elif user.org_id is not None:
         set_rls_context(db, user.org_id)
     
-    from app.db.engine import is_postgres_dsn
-    if is_postgres_dsn():
-        db.execute(text("SELECT set_config('app.current_user_id', :user_id, true)"), {"user_id": user.id})
-        db.execute(text("SELECT set_config('app.current_user_role', :role, true)"), {"role": "platform_admin" if user.is_platform_admin else user.role})
+    set_actor_context(db, user.id, "platform_admin" if user.is_platform_admin else user.role)
 
 
 class AssignmentService:
@@ -53,7 +49,7 @@ class AssignmentService:
 
     def _require_learner_access(self, block_id: int, user: TokenData):
         block, module, course = self._require_assignment_block(block_id, user)
-        if not EnrollmentRepository(self.db).has_access(user.id, course.id, user.org_id):
+        if not EnrollmentRepository(self.db).has_access(user.id, course.id, user.org_id, require_enrollment=True, actor=user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not enrolled or access denied")
         return block, module, course
 
@@ -131,7 +127,7 @@ class AssignmentService:
         return {"message": "Assignment submitted successfully", "submission": submission.to_dict()}
 
     def _mark_assignment_complete(self, *, user: TokenData, block_id: int, module_id: int, course_id: str, files_count: int) -> None:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         progress_repo = ProgressRepository(self.db)
         progress = progress_repo.get_block_progress(user.id, block_id, user.org_id)
         if progress is None:
@@ -259,6 +255,8 @@ class AssignmentService:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Submission access denied")
         if admin and not user.is_platform_admin:
             self._require_admin_access(submission.block_id, user)
+        elif not admin and not user.is_platform_admin:
+            self._require_learner_access(submission.block_id, user)
         return submission
 
     def resolve_download(self, submission_id: int, user: TokenData, *, asset_id: str | None = None) -> tuple[AssignmentSubmission, dict]:

@@ -13,10 +13,10 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
-from sqlalchemy import create_engine, event, text
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
 
 logger = logging.getLogger("telite.db.engine")
@@ -46,8 +46,8 @@ def _build_dsn() -> str:
     host = os.getenv("TELITE_POSTGRES_HOST") or os.getenv("POSTGRES_HOST") or "localhost"
     port = os.getenv("TELITE_POSTGRES_PORT") or os.getenv("POSTGRES_PORT") or "5432"
     db   = os.getenv("TELITE_POSTGRES_DB")   or os.getenv("POSTGRES_DB")
-    user = os.getenv("TELITE_POSTGRES_USER") or os.getenv("POSTGRES_USER")
-    pw   = os.getenv("TELITE_POSTGRES_PASSWORD") or os.getenv("POSTGRES_PASSWORD")
+    user = os.getenv("TELITE_RUNTIME_POSTGRES_USER") or os.getenv("TELITE_POSTGRES_USER") or os.getenv("POSTGRES_USER")
+    pw   = os.getenv("TELITE_RUNTIME_POSTGRES_PASSWORD") or os.getenv("TELITE_POSTGRES_PASSWORD") or os.getenv("POSTGRES_PASSWORD")
 
     if not all([db, user, pw]):
         raise RuntimeError(
@@ -90,6 +90,12 @@ def _create_engine():
 
     engine = create_engine(dsn, **kwargs)
 
+    # Production application connections must not be superusers, BYPASSRLS
+    # roles or owners of tenant tables. Migration tooling uses its own purpose.
+    from app.core.runtime import is_production_like
+    if not is_sqlite and is_production_like() and os.getenv("TELITE_DB_CONNECTION_PURPOSE") != "migration":
+        event.listen(engine, "connect", _verify_runtime_role)
+
     # Enable WAL mode for SQLite (better concurrent reads)
     if is_sqlite:
         @event.listens_for(engine, "connect")
@@ -101,6 +107,25 @@ def _create_engine():
 
     logger.info(f"Active Database URL: {engine.url}")
     return engine
+
+
+def _verify_runtime_role(dbapi_conn, _):
+    """Validate a production runtime connection before it enters the pool."""
+    cursor = dbapi_conn.cursor()
+    try:
+        cursor.execute("SELECT rolsuper, rolbypassrls, rolcreaterole FROM pg_roles WHERE rolname=current_user")
+        flags = cursor.fetchone()
+        cursor.execute("""SELECT count(*) FROM pg_tables t
+            WHERE t.schemaname='public' AND t.tableowner=current_user
+              AND EXISTS (SELECT 1 FROM information_schema.columns c
+                  WHERE c.table_schema=t.schemaname AND c.table_name=t.tablename
+                    AND c.column_name IN ('org_id', 'organization_id'))""")
+        owned = cursor.fetchone()[0]
+        if not flags or any(flags) or owned:
+            raise RuntimeError("Production runtime DB role must be non-owner and have no RLS bypass")
+    finally:
+        cursor.close()
+        dbapi_conn.rollback()
 
 
 # Singleton engine — created once at import time
@@ -158,18 +183,16 @@ def apply_tenant_context(session: Session, org_id: int) -> None:
     """Apply tenant RLS context to an existing transactional session."""
     if not is_postgres_dsn():
         return
-    session.execute(
-        text("SELECT set_config('app.current_org_id', :org_id, true)"),
-        {"org_id": str(org_id)},
-    )
-    session.execute(text("SET LOCAL app.bypass_rls = 'off'"))
+    from app.db.rls import set_rls_context
+    set_rls_context(session, org_id)
 
 
 def apply_platform_context(session: Session) -> None:
     """Apply platform RLS bypass context to an existing transactional session."""
     if not is_postgres_dsn():
         return
-    session.execute(text("SET LOCAL app.bypass_rls = 'on'"))
+    from app.db.rls import set_platform_context
+    set_platform_context(session)
 
 
 @contextmanager
