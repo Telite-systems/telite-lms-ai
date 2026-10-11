@@ -68,7 +68,7 @@ plus organization_branding.organization_id. ENABLE/FORCE RLS apply to those tabl
 Existing actor-specific permissive policies remain; a default permissive tenant
 policy is created only where none exists. Restrictive policies cannot broaden
 assignment ownership/reviewer policies. The helper table list and branding column
-mapping are reconciled. These SQL changes must be verified on migrated PostgreSQL.
+mapping are reconciled. These SQL changes are exercised on migrated PostgreSQL in the dedicated CI job.
 
 RLS context is stored per SQLAlchemy Session and reapplied with SET LOCAL when a
 transaction begins, including after commit/retry. Actor ID/role also survive those
@@ -130,10 +130,21 @@ database, applies actual Alembic migrations, provisions a separate non-owner rol
 and enables `tests/test_authorization_postgres.py`. It checks actual ENABLE/FORCE and
 restrictive guard coverage, role ownership/bypass flags, A/B reads/writes, missing
 context, commit/rollback and single-connection pool reuse, HTTP current authority,
-and concurrent refresh consumption. It then downgrades/re-upgrades this revision.
+and concurrent refresh consumption. A real notification-worker test uses an in-memory
+delivery stub and forged cross-tenant user reference; no messages are sent. It then
+downgrades/re-upgrades this revision.
 The main critical regression workflow also runs authority, runtime-role, certificate
 resource and assignment-revocation tests. CI results must be read before declaring
 PostgreSQL isolation verified; local live tests are intentionally skipped.
+
+Remote Stage 1 evidence: commit `2bbafb54bc56f8c34e38fb9790572c6faeeedcbf`,
+[run 38160082795](https://github.com/Telite-systems/telite-lms-ai/actions/runs/38160082795),
+passed 42 regression tests, four live non-owner PostgreSQL tests, actual migration
+and runtime-role provisioning, and downgrade/re-upgrade. Commit
+`747b3c8b66724de52fa36e644d44be5a091418f3` strengthens the suspension assertion to
+use the newly refreshed live token; its dedicated job also passed. The added worker
+check requires the next CI run before claiming worker isolation verified. These
+checks do not constitute a complete endpoint/worker/platform-bypass audit.
 
 Stage 0 remote results: backend smoke/critical regression, PostgreSQL migration chain,
 frontend and Docker build passed; secret and source-artifact jobs passed. Dependency

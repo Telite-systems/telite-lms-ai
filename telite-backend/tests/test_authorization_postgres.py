@@ -143,3 +143,44 @@ def test_http_runtime_authority_and_concurrent_refresh(runtime):
     assert client.get("/auth/me", headers=renewed_headers).status_code == 401
     with admin.begin() as conn:
         conn.execute(text("UPDATE memberships SET status='active' WHERE user_id='synthetic-s1-a'"))
+
+
+def test_notification_worker_tenant_scope_and_pool_reuse(runtime, monkeypatch):
+    """Run the real worker with synthetic rows and an in-memory delivery stub."""
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import engine as database
+    from app.models.notification import Notification
+    from app.services import email
+    from app.workers.notification_tasks import dispatch_pending_notifications
+
+    engine, admin = runtime
+    with Session(admin) as db:
+        db.add_all([
+            Notification(user_id="synthetic-s1-a", org_id=A, title="Tenant A only", body="Synthetic",
+                         metadata_json='{"delivery_channel":"email"}'),
+            Notification(user_id="synthetic-s1-b", org_id=B, title="Tenant B only", body="Synthetic",
+                         metadata_json='{"delivery_channel":"email"}'),
+            # A forged reference must not join to tenant B's user inside tenant A.
+            Notification(user_id="synthetic-s1-b", org_id=A, title="Forged cross-tenant", body="Synthetic",
+                         metadata_json='{"delivery_channel":"email"}'),
+        ])
+        db.commit()
+    monkeypatch.setattr(database, "get_session_factory", lambda: sessionmaker(bind=engine))
+    deliveries = []
+    def capture_delivery(**message):
+        deliveries.append((message["to_email"], message["title"]))
+        return True
+    monkeypatch.setattr(email, "_dispatch_notification_email", capture_delivery)
+    result = dispatch_pending_notifications.run()
+    assert result["failed"] == 0
+    assert result["dispatched"] == 2
+    assert sorted(deliveries) == [
+        ("s1-a@example.invalid", "Tenant A only"),
+        ("s1-b@example.invalid", "Tenant B only"),
+    ]
+    with Session(engine) as db:
+        assert db.scalars(select(Notification.id)).all() == []
+        assert db.scalars(select(User.id)).all() == []
+    with admin.begin() as conn:
+        conn.execute(text("DELETE FROM notifications WHERE org_id IN (:a, :b)"), {"a": A, "b": B})
