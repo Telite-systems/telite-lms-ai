@@ -7,7 +7,7 @@
 ### BEFORE (python:3.12-slim-bookworm)
 
 ```dockerfile
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 LABEL org.opencontainers.image.title="Telite LMS Backend" \
       org.opencontainers.image.description="FastAPI backend for Telite LMS" \
@@ -65,7 +65,7 @@ CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${BACKEND_INTERNAL_
 ### AFTER (python:3.12-slim + Security Hardening)
 
 ```dockerfile
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 LABEL org.opencontainers.image.title="Telite LMS Backend" \
       org.opencontainers.image.description="FastAPI backend for Telite LMS" \
